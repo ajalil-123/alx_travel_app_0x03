@@ -24,12 +24,23 @@ environ.Env.read_env()
 DEBUG = env('DEBUG')
 SECRET_KEY = env('SECRET_KEY')
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
+#CHAPA_SECRET_KEY = os.environ.get("CHAPA_SECRET_KEY")
 
+# #tell django i have some secrete keys in .env file
+# CHAPA_SECRET_KEY = os.getenv('CHAPA_SECRET_KEY')
+# CHAPA_BASE_URL = os.getenv('CHAPA_BASE_URL', 'https://api.chapa.co/v1/transaction')
+
+# #Set up chapa API secrete key
+# CHAPA_SECRET_KEY= CHASECK_TEST-IrCHfss1XRE9S1UZXBzu44hGlgvt8TcB
+# CHAPA_BASE_URL=https://api.chapa.co/v1/transaction
 
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+
 
 
 # Quick-start development settings - unsuitable for production
@@ -38,11 +49,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-o323jj&izwq#(pve^mb_)14n*0!mp5t4v3mtcjps&_%-za1+c3'
 
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
 ALLOWED_HOSTS = []
 
+# ==============================
+# CHAPA PAYMENT SETTINGS
+# ==============================
+CHAPA_SECRET_KEY = env("CHAPA_SECRET_KEY")
+CHAPA_BASE_URL = "https://api.chapa.co/v1/transaction"
+#CHAPA_INITIALIZE_URL = f"{CHAPA_API_BASE_URL}/initialize"
+#CHAPA_VERIFY_URL = f"{CHAPA_API_BASE_URL}/verify"
 
 # Application definition
 

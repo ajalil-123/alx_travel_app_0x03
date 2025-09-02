@@ -180,3 +180,23 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# Celery Configuration
+CELERY_BROKER_URL = 'amqp://localhost'  # RabbitMQ broker URL
+CELERY_RESULT_BACKEND = 'rpc://'  # Use RPC backend for results
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+# Email Configuration (update with your email settings)
+#EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'  # Replace with your SMTP server
+EMAIL_PORT = 535
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'abduljalilzakaria1@gmail.com'  # Replace with your email
+EMAIL_HOST_PASSWORD = 'yage gbsz lpbj wsrz'  # Replace with your password
+DEFAULT_FROM_EMAIL = 'abduljalilzakaria1@gmail.com'
+

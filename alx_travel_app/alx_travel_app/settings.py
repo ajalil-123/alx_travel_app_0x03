@@ -58,10 +58,15 @@ ALLOWED_HOSTS = []
 # ==============================
 # CHAPA PAYMENT SETTINGS
 # ==============================
-CHAPA_SECRET_KEY = env("CHAPA_SECRET_KEY")
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+CHAPA_SECRET_KEY = os.getenv("CHAPA_SECRET_KEY")
 CHAPA_BASE_URL = "https://api.chapa.co/v1/transaction"
-#CHAPA_INITIALIZE_URL = f"{CHAPA_API_BASE_URL}/initialize"
-#CHAPA_VERIFY_URL = f"{CHAPA_API_BASE_URL}/verify"
+
 
 # Application definition
 
@@ -76,6 +81,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'drf_yasg',
+    'rest_framework.authtoken',
 ]
 
 MIDDLEWARE = [
@@ -156,7 +162,15 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_PARSER_CLASSES': (
         'rest_framework.parsers.JSONParser',
-    )
+    ),
+     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',  # Optional, for browsable API
+    ],
+
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ]
 }
 
 # Internationalization
@@ -182,21 +196,27 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
-# Celery Configuration
-CELERY_BROKER_URL = 'amqp://localhost'  # RabbitMQ broker URL
-CELERY_RESULT_BACKEND = 'rpc://'  # Use RPC backend for results
+# setting up celery for task execution
+import os
+from celery.schedules import crontab
+
+# Celery Configurations
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'UTC'
+CELERY_TIMEZONE = 'Africa/Kigali'
 
-# Email Configuration (update with your email settings)
-#EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'  # Replace with your SMTP server
-EMAIL_PORT = 535
+
+# Email Configuration (Gmail Example)
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'abduljalilzakaria1@gmail.com'  # Replace with your email
-EMAIL_HOST_PASSWORD = 'yage gbsz lpbj wsrz'  # Replace with your password
-DEFAULT_FROM_EMAIL = 'abduljalilzakaria1@gmail.com'
+EMAIL_HOST_USER = 'abduljalilzakaria1@gmail.com'  # Replace with your Gmail
+EMAIL_HOST_PASSWORD = 'yage gbsz lpbj wsrz'  # Use Gmail App Password
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+
 

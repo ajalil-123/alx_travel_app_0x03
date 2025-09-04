@@ -1,192 +1,216 @@
-from django.shortcuts import render
-from rest_framework import viewsets
-from .models import Listing, Booking
+from django.shortcuts import get_object_or_404
+from django.conf import settings
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework import viewsets, status
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
+import requests
+import logging
+
+from .models import Listing, Booking, Payments
 from .serializers import ListingSerializer, BookingSerializer
-from rest_framework.permissions import IsAuthenticatedOrReadOnly
+from .tasks import send_booking_confirmation_email
 
+# -------------------------
+# Chapa API configuration
+# -------------------------
+CHAPA_URL = "https://api.chapa.co/v1/transaction/initialize"
+CHAPA_VERIFY_URL = "https://api.chapa.co/v1/transaction/verify/"
 
+logger = logging.getLogger(__name__)
 
+# -------------------------
+# Listings
+# -------------------------
 class ListingViewSet(viewsets.ModelViewSet):
     queryset = Listing.objects.all()
     serializer_class = ListingSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
 
-from rest_framework import viewsets
-from rest_framework.response import Response
-from rest_framework import status
-from .models import Booking
-from .serializers import BookingSerializer
-from .tasks import send_booking_confirmation_email
 
+# -------------------------
+# Bookings + Payments
+# -------------------------
 class BookingViewSet(viewsets.ModelViewSet):
     queryset = Booking.objects.all()
     serializer_class = BookingSerializer
+    permission_classes = [IsAuthenticated]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        booking = serializer.save()
+        booking = serializer.save(user=request.user)
 
-        # Trigger the Celery email task
-        booking_details = f"Booking ID: {booking.id}\nDestination: {booking.destination}\nDate: {booking.date}"
-        send_booking_confirmation_email.delay(booking.user.email, booking_details)
+        # Trigger Celery email task
+        send_booking_confirmation_email.delay(
+            booking.user.email,
+            str(booking.booking_id)
+        )
 
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
-
-
-import uuid
-import requests
-from django.conf import settings
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from .models import Payments
-from .tasks import send_payment_success_email
-
-CHAPA_API_URL = settings.CHAPA_BASE_URL
-
-
-class InitiatePaymentView(APIView):
-    authentication_classes = []  # No authentication required
-    permission_classes = []      # Public endpoint
-
-    def post(self, request):
         try:
-            # Get data from request body
-            amount = request.data.get("amount")
-            email = request.data.get("email")
-            first_name = request.data.get("first_name", "John")
-            last_name = request.data.get("last_name", "Doe")
+            # Initiate payment with Chapa
+            checkout_url, tx_ref = initiate_payment(
+                amount=booking.total_price,
+                booking_reference=booking.booking_id,
+                user_email=request.user.email,
+                first_name=request.user.first_name,
+                last_name=request.user.last_name
+            )
 
-            # Validate input fields
-            if not amount or not email:
-                return Response(
-                    {"status": "failed", "message": "Amount and email are required"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Generate unique transaction reference
-            tx_ref = f"tx-{uuid.uuid4()}"
-
-            # Prepare request headers
-            headers = {
-                "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
-                "Content-Type": "application/json",
-            }
-
-            # Prepare payload for Chapa API
-            payload = {
-                "amount": str(amount),
-                "currency": "ETB",
-                "email": email,
-                "first_name": first_name,
-                "last_name": last_name,
-                "tx_ref": tx_ref,
-                "callback_url": "http://127.0.0.1:8000/api/payments/verify/",
-                "return_url": "http://127.0.0.1:8000/payment-success/",
-                "customization": {
-                    "title": "Payment for Booking",
-                    "description": "Secure payment via Chapa"
-                }
-            }
-
-            # Call Chapa API
-            response = requests.post(f"{CHAPA_API_URL}/initialize", json=payload, headers=headers)
-            chapa_response = response.json()
-
-            # Check Chapa response
-            if chapa_response.get("status") != "success":
-                return Response(
-                    {"status": "failed", "message": chapa_response.get("message", "Payment initialization failed")},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Save payment to database
+            # Save payment info
             Payments.objects.create(
-                amount=amount,
-                email=email,
-                booking_reference=tx_ref,
-                status="Pending",
-                user=None  # Anonymous for now
+                user=request.user,
+                booking_reference=booking.booking_id,
+                amount=booking.total_price,
+                transaction_id=tx_ref,
+                status="Pending"
             )
 
             return Response({
                 "status": "success",
-                "message": "Payment initialized successfully",
-                "checkout_url": chapa_response["data"]["checkout_url"],
-                "tx_ref": tx_ref
-            }, status=status.HTTP_200_OK)
+                "booking_id": booking.booking_id,
+                "checkout_url": checkout_url
+            }, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            return Response(
-                {"status": "failed", "message": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            logger.error(f"Chapa payment initiation failed: {e}")
+            return Response({
+                "status": "failed",
+                "message": str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
 
 
-class VerifyPaymentView(APIView):
-    authentication_classes = []  # No authentication required
-    permission_classes = []      # Public endpoint
+# -------------------------
+# Chapa payment functions
+# -------------------------
+def initiate_payment(amount, booking_reference, user_email, first_name="Guest", last_name="User"):
+    headers = {
+        "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
+        "Content-Type": "application/json"
+    }
 
-    def get(self, request):
-        try:
-            # Get transaction reference from query params
-            tx_ref = request.query_params.get("tx_ref")
-            if not tx_ref:
-                return Response(
-                    {"status": "failed", "message": "Transaction reference is required"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+    payload = {
+        "amount": str(amount),
+        "currency": "ETB",
+        "email": user_email,
+        "tx_ref": str(booking_reference),
+        "callback_url": "http://127.0.0.1:8000/api/verify-payment/",
+        "return_url": "http://127.0.0.1:8000/payment-success/",
+        "first_name": first_name,
+        "last_name": last_name,
+        "customization": {
+            "title": "ALX Travel",  # max 16 chars
+            "description": "Booking payment"
+        }
+    }
 
-            # Prepare headers
-            headers = {
-                "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
-                "Content-Type": "application/json",
-            }
+    response = requests.post(CHAPA_URL, headers=headers, json=payload)
+    data = response.json()
 
-            # Call Chapa API for verification
-            response = requests.get(f"{CHAPA_API_URL}/verify/{tx_ref}", headers=headers)
-            chapa_response = response.json()
-
-            # Find payment in DB
-            try:
-                payment = Payments.objects.get(booking_reference=tx_ref)
-            except Payments.DoesNotExist:
-                return Response(
-                    {"status": "failed", "message": "Payment not found"},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            # Update payment status
-            if chapa_response.get("status") == "success":
-                payment.status = "Completed"
-                payment.save()
-
-                # Send confirmation email
-                if payment.email:
-                    send_payment_success_email.delay(payment.email, payment.booking_reference)
-
-                return Response(
-                    {"status": "success", "message": "Payment verified successfully"},
-                    status=status.HTTP_200_OK
-                )
-            else:
-                payment.status = "Failed"
-                payment.save()
-                return Response(
-                    {"status": "failed", "message": "Payment failed"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-        except Exception as e:
-            return Response(
-                {"status": "failed", "message": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+    if data.get("status") == "success" and "data" in data and "checkout_url" in data["data"]:
+        checkout_url = data["data"]["checkout_url"]
+        tx_ref = data["data"].get("tx_ref") or str(booking_reference)
+        return checkout_url, tx_ref
+    else:
+        raise Exception(f"Payment initiation failed: {data}")
 
 
+@csrf_exempt
+def verify_payment(request):
+    """
+    Verify Chapa payment and update Payments + Booking status
+    """
+    if request.method != "GET":
+        return JsonResponse({"error": "Invalid request method"}, status=405)
+
+    tx_ref = request.GET.get("tx_ref")
+    if not tx_ref:
+        return JsonResponse({"error": "Missing tx_ref"}, status=400)
+
+    headers = {"Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}"}
+    response = requests.get(f"{CHAPA_VERIFY_URL}{tx_ref}", headers=headers)
+    data = response.json()
+
+    try:
+        payment = Payments.objects.get(transaction_id=tx_ref)
+    except Payments.DoesNotExist:
+        return JsonResponse({"error": "Payment not found"}, status=404)
+
+    if data.get("status") == "success" and data["data"]["status"] == "success":
+        payment.status = "Completed"
+        payment.save()
+
+        booking = get_object_or_404(Booking, booking_id=payment.booking_reference)
+        booking.status = "confirmed"
+        booking.save()
+
+        # Optional: send email via Celery
+        send_booking_confirmation_email.delay(
+            payment.user.email,
+            booking.booking_id
+        )
+
+        return JsonResponse({"status": "success", "message": "Payment verified, booking confirmed"})
+    else:
+        payment.status = "Failed"
+        payment.save()
+        return JsonResponse({"status": "failed", "message": "Payment verification failed"})
+
+
+
+
+# from django.shortcuts import render
+# from rest_framework import viewsets
+# from .models import Listing, Booking
+# from .serializers import ListingSerializer, BookingSerializer
+# from rest_framework.permissions import IsAuthenticatedOrReadOnly
+
+
+# from rest_framework import viewsets, status
+# from rest_framework.response import Response
+# from rest_framework.permissions import IsAuthenticated
+# from .models import Booking
+# from .serializers import BookingSerializer
+# from .tasks import send_booking_confirmation_email
+# import logging
+# from rest_framework import viewsets
+# from rest_framework.response import Response
+# from rest_framework import status
+# from .models import Booking
+# from .serializers import BookingSerializer
+# from .tasks import send_booking_confirmation_email
+# from listings.tasks import send_booking_confirmation_email
+
+
+# class ListingViewSet(viewsets.ModelViewSet):
+#     queryset = Listing.objects.all()
+#     serializer_class = ListingSerializer
+#     permission_classes = [IsAuthenticatedOrReadOnly]
+
+
+
+# logger = logging.getLogger(__name__)
+
+
+# class BookingViewSet(viewsets.ModelViewSet):
+#     queryset = Booking.objects.all()
+#     serializer_class = BookingSerializer
+    
+
+
+#     def create(self, request, *args, **kwargs):
+#             serializer = self.get_serializer(data=request.data)
+#             serializer.is_valid(raise_exception=True)
+#             booking = serializer.save()
+
+#             # Trigger the Celery email task asynchronously
+#             send_booking_confirmation_email.delay(
+#                 booking.user.email,
+#                 str(booking.booking_id)
+#             )
+
+#             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 
@@ -204,36 +228,38 @@ class VerifyPaymentView(APIView):
 # from .models import Payments
 # from .tasks import send_payment_success_email
 
-# CHAPA_API_URL = "https://api.chapa.co/v1/transaction"
+# CHAPA_API_URL = settings.CHAPA_BASE_URL
 
 
 # class InitiatePaymentView(APIView):
 #     authentication_classes = []  # No authentication required
-#     permission_classes = []      # Allow anyone to access
+#     permission_classes = []      # Public endpoint
 
 #     def post(self, request):
 #         try:
-#             # Get data from request
+#             # Get data from request body
 #             amount = request.data.get("amount")
 #             email = request.data.get("email")
 #             first_name = request.data.get("first_name", "John")
 #             last_name = request.data.get("last_name", "Doe")
 
-#             # Validate input
-#             if not all([amount, email, first_name, last_name]):
+#             # Validate input fields
+#             if not amount or not email:
 #                 return Response(
-#                     {"status": "failed", "message": "All fields are required"},
+#                     {"status": "failed", "message": "Amount and email are required"},
 #                     status=status.HTTP_400_BAD_REQUEST
 #                 )
 
-#             # Prepare Chapa API request
+#             # Generate unique transaction reference
+#             tx_ref = f"tx-{uuid.uuid4()}"
+
+#             # Prepare request headers
 #             headers = {
 #                 "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
-#                 "Content-Type": "application/json"
+#                 "Content-Type": "application/json",
 #             }
 
-#             tx_ref = f"tx-{uuid.uuid4()}"  # Unique transaction reference
-
+#             # Prepare payload for Chapa API
 #             payload = {
 #                 "amount": str(amount),
 #                 "currency": "ETB",
@@ -241,32 +267,34 @@ class VerifyPaymentView(APIView):
 #                 "first_name": first_name,
 #                 "last_name": last_name,
 #                 "tx_ref": tx_ref,
-#                 "callback_url": "https://yourdomain.com/api/payments/verify/",
-#                 "return_url": "https://yourdomain.com/payment-success/",
+#                 "callback_url": "http://127.0.0.1:8000/api/payments/verify/",
+#                 "return_url": "http://127.0.0.1:8000/payment-success/",
 #                 "customization": {
 #                     "title": "Payment for Booking",
 #                     "description": "Secure payment via Chapa"
 #                 }
 #             }
 
-#             # Send request to Chapa
+#             # Call Chapa API
 #             response = requests.post(f"{CHAPA_API_URL}/initialize", json=payload, headers=headers)
 #             chapa_response = response.json()
 
 #             # Check Chapa response
 #             if chapa_response.get("status") != "success":
-#                 return Response(chapa_response, status=status.HTTP_400_BAD_REQUEST)
+#                 return Response(
+#                     {"status": "failed", "message": chapa_response.get("message", "Payment initialization failed")},
+#                     status=status.HTTP_400_BAD_REQUEST
+#                 )
 
-#             # Save payment in database
+#             # Save payment to database
 #             Payments.objects.create(
 #                 amount=amount,
 #                 email=email,
-#                 user=None,  # Since no authentication
 #                 booking_reference=tx_ref,
-#                 status="Pending"
+#                 status="Pending",
+#                 user=None  # Anonymous for now
 #             )
 
-#             # Return success response
 #             return Response({
 #                 "status": "success",
 #                 "message": "Payment initialized successfully",
@@ -283,29 +311,31 @@ class VerifyPaymentView(APIView):
 
 # class VerifyPaymentView(APIView):
 #     authentication_classes = []  # No authentication required
-#     permission_classes = []      # Allow anyone to access
+#     permission_classes = []      # Public endpoint
 
 #     def get(self, request):
 #         try:
-#             transaction_id = request.query_params.get("transaction_id")
-#             if not transaction_id:
+#             # Get transaction reference from query params
+#             tx_ref = request.query_params.get("tx_ref")
+#             if not tx_ref:
 #                 return Response(
-#                     {"status": "failed", "message": "Transaction ID is required"},
+#                     {"status": "failed", "message": "Transaction reference is required"},
 #                     status=status.HTTP_400_BAD_REQUEST
 #                 )
 
+#             # Prepare headers
 #             headers = {
 #                 "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
 #                 "Content-Type": "application/json",
 #             }
 
-#             # Send verification request to Chapa
-#             response = requests.get(f"{CHAPA_API_URL}/verify/{transaction_id}", headers=headers)
+#             # Call Chapa API for verification
+#             response = requests.get(f"{CHAPA_API_URL}/verify/{tx_ref}", headers=headers)
 #             chapa_response = response.json()
 
-#             # Get payment from DB
+#             # Find payment in DB
 #             try:
-#                 payment = Payments.objects.get(booking_reference=transaction_id)
+#                 payment = Payments.objects.get(booking_reference=tx_ref)
 #             except Payments.DoesNotExist:
 #                 return Response(
 #                     {"status": "failed", "message": "Payment not found"},
@@ -316,8 +346,11 @@ class VerifyPaymentView(APIView):
 #             if chapa_response.get("status") == "success":
 #                 payment.status = "Completed"
 #                 payment.save()
+
+#                 # Send confirmation email
 #                 if payment.email:
 #                     send_payment_success_email.delay(payment.email, payment.booking_reference)
+
 #                 return Response(
 #                     {"status": "success", "message": "Payment verified successfully"},
 #                     status=status.HTTP_200_OK
@@ -336,84 +369,234 @@ class VerifyPaymentView(APIView):
 #                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
 #             )
 
-# import requests
-# import uuid
-# from django.conf import settings
-# from django.http import JsonResponse
-# from django.views.decorators.csrf import csrf_exempt
 
-# # ============================================
-# # 1. INITIATE PAYMENT
-# # ============================================
-# @csrf_exempt
-# def initiate_payment(request):
-#     if request.method != "POST":
-#         return JsonResponse({"message": "Method not allowed"}, status=405)
 
-#     try:
-#         # Get data from the request body
-#         amount = request.POST.get("amount")
-#         email = request.POST.get("email")
-#         first_name = request.POST.get("first_name")
-#         last_name = request.POST.get("last_name")
 
-#         if not amount or not email or not first_name or not last_name:
-#             return JsonResponse({"message": "Missing required fields"}, status=400)
 
-#         # Generate a unique transaction reference
-#         tx_ref = str(uuid.uuid4())
 
-#         # Prepare payload
-#         payload = {
-#             "amount": amount,
-#             "currency": "ETB",  # Change this if needed: GHS, KES, RWF, etc.
-#             "email": email,
-#             "first_name": first_name,
-#             "last_name": last_name,
-#             "tx_ref": tx_ref,
-#             "callback_url": f"http://127.0.0.1:8000/api/payments/verify/{tx_ref}",
-#             "return_url": "http://127.0.0.1:8000/payment-success/",
-#             "customization": {
-#                 "title": "Ecommerce Payment",
-#                 "description": "Payment for selected items",
-#             }
-#         }
 
-#         # Send request to Chapa API
-#         headers = {
-#             "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
-#             "Content-Type": "application/json",
-#         }
-#         response = requests.post(settings.CHAPA_INITIALIZE_URL, json=payload, headers=headers)
-#         res_data = response.json()
 
-#         # Check for errors from Chapa API
-#         if response.status_code != 200:
-#             return JsonResponse(res_data, status=response.status_code)
 
-#         return JsonResponse(res_data, status=200)
 
-#     except Exception as e:
-#         return JsonResponse({"message": str(e)}, status=500)
+# # import uuid
+# # import requests
+# # from django.conf import settings
+# # from rest_framework.views import APIView
+# # from rest_framework.response import Response
+# # from rest_framework import status
+# # from .models import Payments
+# # from .tasks import send_payment_success_email
 
-# # ============================================
-# # 2. VERIFY PAYMENT
-# # ============================================
-# @csrf_exempt
-# def verify_payment(request, reference):
-#     try:
-#         url = f"{settings.CHAPA_VERIFY_URL}/{reference}"
-#         headers = {
-#             "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
-#         }
+# # CHAPA_API_URL = "https://api.chapa.co/v1/transaction"
 
-#         response = requests.get(url, headers=headers)
-#         res_data = response.json()
 
-#         if response.status_code != 200:
-#             return JsonResponse(res_data, status=response.status_code)
+# # class InitiatePaymentView(APIView):
+# #     authentication_classes = []  # No authentication required
+# #     permission_classes = []      # Allow anyone to access
 
-#         return JsonResponse(res_data, status=200)
+# #     def post(self, request):
+# #         try:
+# #             # Get data from request
+# #             amount = request.data.get("amount")
+# #             email = request.data.get("email")
+# #             first_name = request.data.get("first_name", "John")
+# #             last_name = request.data.get("last_name", "Doe")
 
-#     except Exception as e:
-#         return JsonResponse({"message": str(e)}, status=500)
+# #             # Validate input
+# #             if not all([amount, email, first_name, last_name]):
+# #                 return Response(
+# #                     {"status": "failed", "message": "All fields are required"},
+# #                     status=status.HTTP_400_BAD_REQUEST
+# #                 )
+
+# #             # Prepare Chapa API request
+# #             headers = {
+# #                 "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
+# #                 "Content-Type": "application/json"
+# #             }
+
+# #             tx_ref = f"tx-{uuid.uuid4()}"  # Unique transaction reference
+
+# #             payload = {
+# #                 "amount": str(amount),
+# #                 "currency": "ETB",
+# #                 "email": email,
+# #                 "first_name": first_name,
+# #                 "last_name": last_name,
+# #                 "tx_ref": tx_ref,
+# #                 "callback_url": "https://yourdomain.com/api/payments/verify/",
+# #                 "return_url": "https://yourdomain.com/payment-success/",
+# #                 "customization": {
+# #                     "title": "Payment for Booking",
+# #                     "description": "Secure payment via Chapa"
+# #                 }
+# #             }
+
+# #             # Send request to Chapa
+# #             response = requests.post(f"{CHAPA_API_URL}/initialize", json=payload, headers=headers)
+# #             chapa_response = response.json()
+
+# #             # Check Chapa response
+# #             if chapa_response.get("status") != "success":
+# #                 return Response(chapa_response, status=status.HTTP_400_BAD_REQUEST)
+
+# #             # Save payment in database
+# #             Payments.objects.create(
+# #                 amount=amount,
+# #                 email=email,
+# #                 user=None,  # Since no authentication
+# #                 booking_reference=tx_ref,
+# #                 status="Pending"
+# #             )
+
+# #             # Return success response
+# #             return Response({
+# #                 "status": "success",
+# #                 "message": "Payment initialized successfully",
+# #                 "checkout_url": chapa_response["data"]["checkout_url"],
+# #                 "tx_ref": tx_ref
+# #             }, status=status.HTTP_200_OK)
+
+# #         except Exception as e:
+# #             return Response(
+# #                 {"status": "failed", "message": str(e)},
+# #                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+# #             )
+
+
+# # class VerifyPaymentView(APIView):
+# #     authentication_classes = []  # No authentication required
+# #     permission_classes = []      # Allow anyone to access
+
+# #     def get(self, request):
+# #         try:
+# #             transaction_id = request.query_params.get("transaction_id")
+# #             if not transaction_id:
+# #                 return Response(
+# #                     {"status": "failed", "message": "Transaction ID is required"},
+# #                     status=status.HTTP_400_BAD_REQUEST
+# #                 )
+
+# #             headers = {
+# #                 "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
+# #                 "Content-Type": "application/json",
+# #             }
+
+# #             # Send verification request to Chapa
+# #             response = requests.get(f"{CHAPA_API_URL}/verify/{transaction_id}", headers=headers)
+# #             chapa_response = response.json()
+
+# #             # Get payment from DB
+# #             try:
+# #                 payment = Payments.objects.get(booking_reference=transaction_id)
+# #             except Payments.DoesNotExist:
+# #                 return Response(
+# #                     {"status": "failed", "message": "Payment not found"},
+# #                     status=status.HTTP_404_NOT_FOUND
+# #                 )
+
+# #             # Update payment status
+# #             if chapa_response.get("status") == "success":
+# #                 payment.status = "Completed"
+# #                 payment.save()
+# #                 if payment.email:
+# #                     send_payment_success_email.delay(payment.email, payment.booking_reference)
+# #                 return Response(
+# #                     {"status": "success", "message": "Payment verified successfully"},
+# #                     status=status.HTTP_200_OK
+# #                 )
+# #             else:
+# #                 payment.status = "Failed"
+# #                 payment.save()
+# #                 return Response(
+# #                     {"status": "failed", "message": "Payment failed"},
+# #                     status=status.HTTP_400_BAD_REQUEST
+# #                 )
+
+# #         except Exception as e:
+# #             return Response(
+# #                 {"status": "failed", "message": str(e)},
+# #                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+# #             )
+
+# # import requests
+# # import uuid
+# # from django.conf import settings
+# # from django.http import JsonResponse
+# # from django.views.decorators.csrf import csrf_exempt
+
+# # # ============================================
+# # # 1. INITIATE PAYMENT
+# # # ============================================
+# # @csrf_exempt
+# # def initiate_payment(request):
+# #     if request.method != "POST":
+# #         return JsonResponse({"message": "Method not allowed"}, status=405)
+
+# #     try:
+# #         # Get data from the request body
+# #         amount = request.POST.get("amount")
+# #         email = request.POST.get("email")
+# #         first_name = request.POST.get("first_name")
+# #         last_name = request.POST.get("last_name")
+
+# #         if not amount or not email or not first_name or not last_name:
+# #             return JsonResponse({"message": "Missing required fields"}, status=400)
+
+# #         # Generate a unique transaction reference
+# #         tx_ref = str(uuid.uuid4())
+
+# #         # Prepare payload
+# #         payload = {
+# #             "amount": amount,
+# #             "currency": "ETB",  # Change this if needed: GHS, KES, RWF, etc.
+# #             "email": email,
+# #             "first_name": first_name,
+# #             "last_name": last_name,
+# #             "tx_ref": tx_ref,
+# #             "callback_url": f"http://127.0.0.1:8000/api/payments/verify/{tx_ref}",
+# #             "return_url": "http://127.0.0.1:8000/payment-success/",
+# #             "customization": {
+# #                 "title": "Ecommerce Payment",
+# #                 "description": "Payment for selected items",
+# #             }
+# #         }
+
+# #         # Send request to Chapa API
+# #         headers = {
+# #             "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
+# #             "Content-Type": "application/json",
+# #         }
+# #         response = requests.post(settings.CHAPA_INITIALIZE_URL, json=payload, headers=headers)
+# #         res_data = response.json()
+
+# #         # Check for errors from Chapa API
+# #         if response.status_code != 200:
+# #             return JsonResponse(res_data, status=response.status_code)
+
+# #         return JsonResponse(res_data, status=200)
+
+# #     except Exception as e:
+# #         return JsonResponse({"message": str(e)}, status=500)
+
+# # # ============================================
+# # # 2. VERIFY PAYMENT
+# # # ============================================
+# # @csrf_exempt
+# # def verify_payment(request, reference):
+# #     try:
+# #         url = f"{settings.CHAPA_VERIFY_URL}/{reference}"
+# #         headers = {
+# #             "Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}",
+# #         }
+
+# #         response = requests.get(url, headers=headers)
+# #         res_data = response.json()
+
+# #         if response.status_code != 200:
+# #             return JsonResponse(res_data, status=response.status_code)
+
+# #         return JsonResponse(res_data, status=200)
+
+# #     except Exception as e:
+# #         return JsonResponse({"message": str(e)}, status=500)

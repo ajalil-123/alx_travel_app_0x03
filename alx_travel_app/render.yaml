@@ -1,64 +1,23 @@
 services:
-  # ----------------------------
-  # 1. Django Web Service
-  # ----------------------------
   - type: web
     name: alx-travel-app
     env: python
     plan: free
-    buildCommand: |
-      pip install --upgrade pip
-      pip install -r requirements.txt
-      python manage.py collectstatic --noinput
-      python manage.py migrate
-    startCommand: gunicorn alx_travel_app.wsgi:application --bind 0.0.0.0:$PORT
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "gunicorn alx_travel_app.wsgi:application --bind 0.0.0.0:$PORT"
     envVars:
-      - key: SECRET_KEY
+      - key: DJANGO_SECRET_KEY
         sync: false
       - key: DEBUG
-        value: "False"
-      - key: CHAPA_SECRET_KEY
-        sync: false
+        value: False
+      - key: ALLOWED_HOSTS
+        value: your-app-name.onrender.com
       - key: REDIS_URL
         fromService:
           type: redis
-          name: alx-travel-redis
+          name: redis
           property: connectionString
-      - key: EMAIL_HOST_USER
-        sync: false
-      - key: EMAIL_HOST_PASSWORD
-        sync: false
 
-  # ----------------------------
-  # 2. Celery Worker Service
-  # ----------------------------
-  - type: worker
-    name: alx-travel-celery-worker
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A alx_travel_app worker --loglevel=info
-    envVars:
-      - key: SECRET_KEY
-        sync: false
-      - key: DEBUG
-        value: "False"
-      - key: CHAPA_SECRET_KEY
-        sync: false
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: alx-travel-redis
-          property: connectionString
-      - key: EMAIL_HOST_USER
-        sync: false
-      - key: EMAIL_HOST_PASSWORD
-        sync: false
-
-  # ----------------------------
-  # 3. Redis Instance
-  # ----------------------------
   - type: redis
-    name: alx-travel-redis
+    name: redis
     plan: free
-    maxmemoryPolicy: noeviction

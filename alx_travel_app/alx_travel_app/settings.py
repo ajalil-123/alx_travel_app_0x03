@@ -34,9 +34,7 @@ SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret-key")
 
 ALLOWED_HOSTS = ["*"]
 
-# Redis for Celery
-CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+
 
 # Swagger Settings
 SWAGGER_SETTINGS = {
@@ -205,6 +203,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -219,6 +219,9 @@ from celery.schedules import crontab
 # Celery Configurations
 #CELERY_BROKER_URL = 'redis://localhost:6379/0'
 #CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+
+CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'

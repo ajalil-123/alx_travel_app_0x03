@@ -21,18 +21,34 @@ env = environ.Env(
 # reading .env file
 environ.Env.read_env()
 
-DEBUG = env('DEBUG')
-SECRET_KEY = env('SECRET_KEY')
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
-#CHAPA_SECRET_KEY = os.environ.get("CHAPA_SECRET_KEY")
+#DEBUG = env('DEBUG')
+#SECRET_KEY = env('SECRET_KEY')
+#ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
 
-# #tell django i have some secrete keys in .env file
-# CHAPA_SECRET_KEY = os.getenv('CHAPA_SECRET_KEY')
-# CHAPA_BASE_URL = os.getenv('CHAPA_BASE_URL', 'https://api.chapa.co/v1/transaction')
+import os
+import dj_database_url
 
-# #Set up chapa API secrete key
-# CHAPA_SECRET_KEY= CHASECK_TEST-IrCHfss1XRE9S1UZXBzu44hGlgvt8TcB
-# CHAPA_BASE_URL=https://api.chapa.co/v1/transaction
+DEBUG = os.getenv("DEBUG", "False") == "True"
+
+SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret-key")
+
+ALLOWED_HOSTS = ["*"]
+
+# Redis for Celery
+CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+
+# Swagger Settings
+SWAGGER_SETTINGS = {
+    'USE_SESSION_AUTH': False,
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header',
+        }
+    },
+}
 
 
 
@@ -201,8 +217,8 @@ import os
 from celery.schedules import crontab
 
 # Celery Configurations
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+#CELERY_BROKER_URL = 'redis://localhost:6379/0'
+#CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'

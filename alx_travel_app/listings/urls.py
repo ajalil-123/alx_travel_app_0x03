@@ -13,4 +13,5 @@ urlpatterns = [
     path('', include(router.urls)),
     path("payments/initiate/", initiate_payment, name="initiate-payment"),
     path("payments/verify/", verify_payment, name="verify-payment"),
+    
 ]

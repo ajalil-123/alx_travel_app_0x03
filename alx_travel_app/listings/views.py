@@ -95,8 +95,9 @@ def initiate_payment(amount, booking_reference, user_email, first_name="Guest", 
         "currency": "ETB",
         "email": user_email,
         "tx_ref": str(booking_reference),
-        "callback_url": "http://127.0.0.1:8000/api/verify-payment/",
-        "return_url": "http://127.0.0.1:8000/payment-success/",
+        "callback_url": "https://alx-travel-app.onrender.com/api/verify-payment/",
+        "return_url": "https://alx-travel-app.onrender.com/payment-success/",
+       "cancel_url": "http://127.0.0.1:8000/payment-cancel/",
         "first_name": first_name,
         "last_name": last_name,
         "customization": {
@@ -157,6 +158,14 @@ def verify_payment(request):
         payment.save()
         return JsonResponse({"status": "failed", "message": "Payment verification failed"})
 
+from django.shortcuts import render
+from django.http import HttpResponse
+
+def payment_success(request):
+    return HttpResponse("<h1>Payment Successful ✅</h1><p>Thank you for your booking! You can close this tab.</p>")
+
+def payment_cancel(request):
+    return HttpResponse("<h1>Payment Cancelled ❌</h1><p>Your booking was not completed. Please try again.</p>")
 
 
 

@@ -6,12 +6,8 @@ django-cors-headers==4.7.0
 djangorestframework==3.16.0
 drf-yasg==1.21.10
 
-# Celery + dependencies
+# Celery (dependencies will be resolved automatically)
 celery==5.3.4
-kombu==5.3.0
-vine==5.1.0
-billiard==4.2.1
-amqp==5.3.1
 
 # Redis (broker for Celery)
 redis==5.2.0
@@ -42,6 +38,3 @@ wcwidth==0.2.13
 
 # Production server
 gunicorn==20.1.0
-
-
-

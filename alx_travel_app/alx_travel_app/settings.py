@@ -67,7 +67,10 @@ SECRET_KEY = 'django-insecure-o323jj&izwq#(pve^mb_)14n*0!mp5t4v3mtcjps&_%-za1+c3
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+#ALLOWED_HOSTS = ["*"]
+
+ALLOWED_HOSTS = ["127.0.0.1", "localhost", "alx-travel-app-v2.onrender.com"]
+
 
 # ==============================
 # CHAPA PAYMENT SETTINGS

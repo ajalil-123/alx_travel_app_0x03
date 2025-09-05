@@ -1,6 +1,7 @@
 # Django core
 Django==5.2.4
 django-cors-headers==4.7.0
+django-environ==0.10.0
 
 # REST framework
 djangorestframework==3.16.0
@@ -38,3 +39,4 @@ wcwidth==0.2.13
 
 # Production server
 gunicorn==20.1.0
+

@@ -11,12 +11,16 @@ services:
       - key: DEBUG
         value: False
       - key: ALLOWED_HOSTS
-        value: your-app-name.onrender.com
+        value: alx-travel-app.onrender.com
       - key: REDIS_URL
         fromService:
           type: redis
           name: redis
           property: connectionString
+    staticPublishPath: ./alx_travel_app/staticfiles
+    staticMappings:
+      - urlPath: /static/
+        directory: ./alx_travel_app/staticfiles
 
   - type: redis
     name: redis

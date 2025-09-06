@@ -223,8 +223,12 @@ from celery.schedules import crontab
 #CELERY_BROKER_URL = 'redis://localhost:6379/0'
 #CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 
-CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+# CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+# CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+
+CELERY_BROKER_URL = "redis://default:DzQ7iipca7c2g3a0o7CMYSdUam9HsMgs@redis-17339.c311.eu-central-1-1.ec2.redns.redis-cloud.com:17339"
+CELERY_RESULT_BACKEND = "redis://default:DzQ7iipca7c2g3a0o7CMYSdUam9HsMgs@redis-17339.c311.eu-central-1-1.ec2.redns.redis-cloud.com:17339"
+
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
